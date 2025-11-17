@@ -1,0 +1,92 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PDM • Machines</title>
+  <link rel="stylesheet" href="/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand"><span class="dot"></span> PDM Neon</div>
+      <nav class="nav">
+        <a href="/index.html">Dashboard</a>
+        <a class="active" href="/machines.html">Machines</a>
+        <a href="/login.html" id="logoutLink">Logout</a>
+      </nav>
+    </aside>
+
+    <div>
+      <div class="header-neon"><div class="bar"></div></div>
+      <header class="topbar">
+        <h1>Machines</h1>
+        <nav class="actions"></nav>
+      </header>
+
+      <main class="container">
+        <section>
+          <div class="row between center">
+            <h2>Fleet Overview</h2>
+          </div>
+          <div id="machines" class="cards"></div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+  <script>
+    ensureAuthOrRedirect();
+    setupLogout();
+
+    async function renderMachines() {
+      const list = await apiGet('/api/machines');
+      const container = document.getElementById('machines');
+      container.innerHTML = '';
+
+      list.forEach(m => {
+        const healthPct = Math.round(m.last_health * 100);
+        const color = healthColor(m.last_health);
+        const card = document.createElement('a');
+        card.className = 'card neon';
+        card.href = `/machine.html?id=${encodeURIComponent(m.id)}`;
+        card.innerHTML = `
+          <div class="card-header">
+            <h3>${m.name} (${m.id})</h3>
+            <span class="badge ${color} glow">${healthPct}%</span>
+          </div>
+          <div class="card-body">
+            <div class="row between"><span>Failure Probability</span><strong>${(m.failure_probability*100).toFixed(0)}%</strong></div>
+            <div>Most Critical: <strong>${m.most_critical}</strong></div>
+            <div>Last Checked: ${new Date(m.last_checked_at).toLocaleString()}</div>
+            <canvas class="spark" data-mid="${m.id}" height="40"></canvas>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+
+      // draw sparklines
+      const canvases = container.querySelectorAll('canvas.spark');
+      canvases.forEach(async (c) => {
+        const id = c.getAttribute('data-mid');
+        try {
+          const h = await apiGet(`/api/machines/${id}/history`);
+          const labels = (h.next_30_days||[]).map(d=>d.date.slice(5));
+          const data = (h.next_30_days||[]).map(d=>Math.round(d.failure_probability*100));
+          const ctx = c.getContext('2d');
+          new Chart(ctx, {
+            type: 'line',
+            data: { labels, datasets: [{ data, borderColor: '#34d399', pointRadius: 0, tension: 0.3, fill: true, backgroundColor: 'rgba(52,211,153,0.15)'}] },
+            options: { plugins:{legend:{display:false}}, scales:{x:{display:false}, y:{display:false}}, elements:{line:{borderWidth:2}}, animation:{duration:600} }
+          });
+        } catch {}
+      });
+    }
+
+    renderMachines();
+    setInterval(renderMachines, 10000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,245 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PDM Dashboard</title>
+  <link rel="stylesheet" href="/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand"><span class="dot"></span> PDM Neon</div>
+      <nav class="nav">
+        <a class="active" href="/index.html">Dashboard</a>
+        <a href="#" onclick="document.getElementById('profileBtn').click(); return false;">Profile</a>
+        <a href="/login.html" id="logoutLink">Logout</a>
+      </nav>
+    </aside>
+
+    <div>
+      <div class="header-neon"><div class="bar"></div></div>
+      <div id="alert" class="alert hidden"></div>
+      <header class="topbar">
+        <h1>Predictive Maintenance Dashboard</h1>
+        <nav class="actions">
+          <button id="profileBtn" class="ghost">Profile</button>
+        </nav>
+      </header>
+
+      <main class="container">
+        <section>
+          <div class="row between center">
+            <h2>Machines</h2>
+            <div class="row center" style="gap:10px;">
+              <div id="trainStatus" class="status"><span class="dot"></span></div>
+              <button id="nextBtn" class="ghost hidden" type="button">Next: View Machines</button>
+            </div>
+          </div>
+          <div id="machines" class="cards"></div>
+        </section>
+
+        <input id="fileInput" type="file" accept=".csv" style="display:none" />
+
+        <section>
+          <div class="dropzone" id="dropzone" tabindex="0" aria-label="CSV Upload Dropzone">
+            <div><strong>Click</strong> to select a CSV or drag & drop it here</div>
+            <div class="hint">Required headers: machine_id,timestamp,temperature,vibration,pressure,humidity</div>
+          </div>
+        </section>
+
+        <div id="profileModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="profileTitle">
+          <div class="modal-panel">
+            <div class="modal-header">
+              <h3 id="profileTitle">Profile</h3>
+              <button id="closeProfile" class="icon">✕</button>
+            </div>
+            <div class="stack">
+              <div id="profileInfo"></div>
+              <button id="signOut">Sign out</button>
+            </div>
+          </div>
+        </div>
+        <div id="toast" class="toast"></div>
+      </main>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+  <script>
+    ensureAuthOrRedirect();
+
+    async function renderMachines() {
+      const list = await apiGet('/api/machines');
+      const container = document.getElementById('machines');
+      container.innerHTML = '';
+
+      let risky = false;
+      list.forEach(m => {
+        if (m.failure_probability > 0.7 || m.last_health < 0.5) risky = true;
+        const healthPct = Math.round(m.last_health * 100);
+        const color = healthColor(m.last_health);
+        const card = document.createElement('a');
+        card.className = 'card neon';
+        card.href = `/machine.html?id=${encodeURIComponent(m.id)}`;
+        card.innerHTML = `
+          <div class="card-header">
+            <h3>${m.name} (${m.id})</h3>
+            <span class="badge ${color} glow">${healthPct}%</span>
+          </div>
+          <div class="card-body">
+            <div class="row between"><span>Failure Probability</span><strong>${(m.failure_probability*100).toFixed(0)}%</strong></div>
+            <div>Most Critical: <strong>${m.most_critical}</strong></div>
+            <div>Last Checked: ${new Date(m.last_checked_at).toLocaleString()}</div>
+            <canvas class="spark" data-mid="${m.id}" height="40"></canvas>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+
+      setAlertVisibility(risky);
+
+      // draw simple sparklines from history
+      const canvases = container.querySelectorAll('canvas.spark');
+      canvases.forEach(async (c) => {
+        const id = c.getAttribute('data-mid');
+        try {
+          const h = await apiGet(`/api/machines/${id}/history`);
+          const labels = (h.next_30_days||[]).map(d=>d.date.slice(5));
+          const data = (h.next_30_days||[]).map(d=>Math.round(d.failure_probability*100));
+          const ctx = c.getContext('2d');
+          new Chart(ctx, {
+            type: 'line',
+            data: { labels, datasets: [{ data, borderColor: '#34d399', pointRadius: 0, tension: 0.3, fill: true, backgroundColor: 'rgba(52,211,153,0.15)'}] },
+            options: { plugins:{legend:{display:false}}, scales:{x:{display:false}, y:{display:false}}, elements:{line:{borderWidth:2}}, animation:{duration:600} }
+          });
+        } catch {}
+      });
+    }
+
+    renderMachines();
+    setInterval(renderMachines, 10000);
+    setupLogout();
+
+    // Toast utility
+    function showToast(title, text, actions=[]) {
+      const host = document.getElementById('toast');
+      const msg = document.createElement('div');
+      msg.className = 'msg';
+      msg.innerHTML = `<div class="title">${title}</div><div>${text||''}</div>`;
+      if (actions.length) {
+        const act = document.createElement('div');
+        act.className = 'actions';
+        actions.forEach(a => {
+          const b = document.createElement('button');
+          b.textContent = a.label;
+          b.onclick = () => { try{ a.onClick && a.onClick(); }finally{ host.removeChild(msg); } };
+          act.appendChild(b);
+        });
+        msg.appendChild(act);
+      }
+      host.appendChild(msg);
+      setTimeout(()=>{ if (host.contains(msg)) host.removeChild(msg); }, 7000);
+    }
+
+    // Upload flow via dropzone or click
+    const fileInput = document.getElementById('fileInput');
+    const trainEl = document.getElementById('trainStatus');
+    const nextBtn = document.getElementById('nextBtn');
+    fileInput.addEventListener('change', async () => {
+      if (!fileInput.files[0]) return;
+      trainEl.innerHTML = progressHtml(0, 'Uploading...');
+      nextBtn.classList.add('hidden');
+      const fd = new FormData();
+      fd.append('file', fileInput.files[0]);
+      try {
+        const res = await fetch('/api/upload', { method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` }, body: fd });
+        if (!res.ok) {
+          let msg = 'Upload failed';
+          try { const j = await res.json(); msg = `${j.error || msg}\n${j.note || ''}\n${j.provided_headers ? 'Provided: '+j.provided_headers : ''}`; } catch {}
+          throw new Error(msg);
+        }
+        const job = await res.json();
+        pollTraining(job.training_job_id);
+      } catch (e) {
+        trainEl.textContent = 'Upload failed';
+        showToast('Upload failed', (e && e.message) ? e.message : 'Please verify the CSV headers and try again.');
+      } finally {
+        fileInput.value = '';
+      }
+    });
+
+    // Drag & drop upload
+    const dz = document.getElementById('dropzone');
+    ['dragenter','dragover'].forEach(ev => dz.addEventListener(ev, (e)=>{ e.preventDefault(); e.stopPropagation(); dz.classList.add('dragover'); }));
+    ;['dragleave','drop'].forEach(ev => dz.addEventListener(ev, (e)=>{ e.preventDefault(); e.stopPropagation(); dz.classList.remove('dragover'); }));
+    dz.addEventListener('click', ()=> fileInput.click());
+    dz.addEventListener('drop', async (e) => {
+      const f = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!f) return;
+      trainEl.innerHTML = progressHtml(0, 'Uploading...');
+      const fd = new FormData();
+      fd.append('file', f);
+      try {
+        const res = await fetch('/api/upload', { method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` }, body: fd });
+        if (!res.ok) {
+          let msg = 'Upload failed';
+          try { const j = await res.json(); msg = `${j.error || msg}\n${j.note || ''}\n${j.provided_headers ? 'Provided: '+j.provided_headers : ''}`; } catch {}
+          throw new Error(msg);
+        }
+        const job = await res.json();
+        pollTraining(job.training_job_id);
+      } catch (e) {
+        trainEl.textContent = 'Upload failed';
+        showToast('Upload failed', (e && e.message) ? e.message : 'Please verify the CSV headers and try again.');
+      }
+    });
+
+    async function pollTraining(id) {
+      const el = document.getElementById('trainStatus');
+      el.innerHTML = progressHtml(0, 'Training queued...');
+      let done = false;
+      while (!done) {
+        await new Promise(r=>setTimeout(r, 800));
+        const r = await fetch(`/api/upload/${id}`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+        if (!r.ok) break;
+        const j = await r.json();
+        el.innerHTML = progressHtml(j.progress || 0, `Status: ${j.status}`);
+        if (j.status === 'completed' || j.status === 'failed') {
+          done = true;
+          if (j.status === 'completed') {
+            el.innerHTML = progressHtml(100, 'Training completed');
+            renderMachines();
+            const machinesEl = document.getElementById('machines');
+            machinesEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            showToast('Training complete', 'Opening Machines list…', [
+              { label: 'Open Now', onClick: () => { window.location.href = '/machines.html'; } }
+            ]);
+            nextBtn.classList.remove('hidden');
+            nextBtn.onclick = () => { window.location.href = '/machines.html'; };
+            // Auto-navigate after short delay
+            setTimeout(() => { window.location.href = '/machines.html'; }, 1200);
+          } else {
+            el.textContent = 'Training failed';
+            showToast('Training failed', 'Please re-check your CSV and try again.');
+          }
+        }
+      }
+    }
+
+    // Profile modal
+    const profileBtn = document.getElementById('profileBtn');
+    const modal = document.getElementById('profileModal');
+    const closeProfile = document.getElementById('closeProfile');
+    const info = document.getElementById('profileInfo');
+    profileBtn.onclick = () => {
+      const user = JSON.parse(localStorage.getItem('user')||'{}');
+      info.textContent = `${user.name||''} · ${user.email||''}`;
+      modal.classList.remove('hidden');
+    };
+    closeProfile.onclick = () => modal.classList.add('hidden');
+    document.getElementById('signOut').onclick = () => { localStorage.removeItem('jwt'); localStorage.removeItem('user'); window.location.href='/login.html'; };
+  </script>
+</body>
+</html>

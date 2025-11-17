@@ -1,0 +1,98 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PDM Login</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main class="container narrow">
+    <h1>Welcome</h1>
+    <div class="card" style="display:grid; gap:12px;">
+      <div style="display:flex; gap:8px;">
+        <button id="tabLogin" class="tab active" type="button">Login</button>
+        <button id="tabSignup" class="tab" type="button">Signup</button>
+      </div>
+
+      <form id="loginForm" class="stack">
+        <label>Email
+          <input type="email" id="email" value="admin@example.com" required />
+        </label>
+        <label>Password
+          <input type="password" id="password" value="pass1234" required />
+        </label>
+        <button type="submit">Sign in</button>
+      </form>
+
+      <form id="signupForm" class="stack" style="display:none;">
+        <label>Name
+          <input type="text" id="s_name" placeholder="Your name" />
+        </label>
+        <label>Email
+          <input type="email" id="s_email" required />
+        </label>
+        <label>Password
+          <input type="password" id="s_password" required />
+        </label>
+        <button type="submit">Create account</button>
+      </form>
+    </div>
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    function activate(tab) {
+      document.getElementById('tabLogin').classList.toggle('active', tab==='login');
+      document.getElementById('tabSignup').classList.toggle('active', tab==='signup');
+      document.getElementById('loginForm').style.display = tab==='login' ? 'grid' : 'none';
+      document.getElementById('signupForm').style.display = tab==='signup' ? 'grid' : 'none';
+    }
+    document.getElementById('tabLogin').onclick = ()=>activate('login');
+    document.getElementById('tabSignup').onclick = ()=>activate('signup');
+
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+        if (!res.ok) throw new Error('Login failed');
+        const data = await res.json();
+        localStorage.setItem('jwt', data.token);
+        localStorage.setItem('user', JSON.stringify(data.user));
+        window.location.href = '/index.html';
+      } catch (err) {
+        alert('Login error: ' + err.message);
+      }
+    });
+
+    document.getElementById('signupForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const body = {
+        name: document.getElementById('s_name').value.trim(),
+        email: document.getElementById('s_email').value.trim(),
+        password: document.getElementById('s_password').value
+      };
+      try {
+        const res = await fetch('/api/auth/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if (!res.ok) throw new Error('Signup failed');
+        const data = await res.json();
+        localStorage.setItem('jwt', data.token);
+        localStorage.setItem('user', JSON.stringify(data.user));
+        window.location.href = '/index.html';
+      } catch (err) {
+        alert('Signup error: ' + err.message);
+      }
+    });
+  </script>
+</body>
+</html>

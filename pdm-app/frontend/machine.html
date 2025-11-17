@@ -1,0 +1,159 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Machine Detail</title>
+  <link rel="stylesheet" href="/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>Machine Detail</h1>
+    <nav>
+      <a href="/index.html">Dashboard</a>
+      <a href="/login.html" id="logoutLink">Logout</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    <section class="card">
+      <h2 id="title">Machine</h2>
+      <div class="grid">
+        <label>Vibration (0-1)
+          <input type="number" id="vibration" step="0.01" min="0" max="1" value="0.5" />
+        </label>
+        <label>Temperature (0-1)
+          <input type="number" id="temperature" step="0.01" min="0" max="1" value="0.5" />
+        </label>
+        <label>Pressure (0-1)
+          <input type="number" id="pressure" step="0.01" min="0" max="1" value="0.5" />
+        </label>
+      </div>
+      <div class="row between center">
+        <button id="predictBtn">Predict Now</button>
+        <div id="cost" aria-live="polite"></div>
+      </div>
+      <pre id="result" class="json"></pre>
+    </section>
+
+    <section class="card">
+      <h3>Monthly Failure Probability</h3>
+      <div class="chart-wrap">
+        <canvas id="chart"></canvas>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="row between center">
+        <h3>Parameter History</h3>
+        <button id="dlCsv" class="ghost">Download Predictions CSV</button>
+      </div>
+      <div style="overflow:auto;">
+        <table id="histTable">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Vibration</th>
+              <th>Temperature</th>
+              <th>Pressure</th>
+              <th>Humidity</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    ensureAuthOrRedirect();
+    setupLogout();
+
+    const params = new URLSearchParams(location.search);
+    const machineId = params.get('id');
+    document.getElementById('title').textContent = `Machine ${machineId}`;
+    let chartRef = null;
+
+    async function loadHistory() {
+      const data = await apiGet(`/api/machines/${encodeURIComponent(machineId)}/history`);
+      const labels = data.monthly.map(m => m.month);
+      const values = data.monthly.map(m => Math.round(m.failure_probability * 100));
+      const ctx = document.getElementById('chart').getContext('2d');
+      if (chartRef) {
+        chartRef.destroy();
+      }
+      chartRef = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Failure %',
+            data: values,
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16,185,129,0.2)',
+            pointRadius: 3,
+            pointBackgroundColor: '#10b981',
+            tension: 0.25
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            y: { beginAtZero: true, ticks: { callback: (v)=> v + '%' } },
+            x: { grid: { color: 'rgba(148,163,184,0.1)' } }
+          },
+          plugins: {
+            legend: { labels: { color: '#cbd5e1' } }
+          }
+        }
+      });
+
+      // render param history
+      const tb = document.querySelector('#histTable tbody');
+      tb.innerHTML = '';
+      (data.param_history||[]).forEach(r => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${fmtDate(r.timestamp)}</td><td>${r.vibration}</td><td>${r.temperature}</td><td>${r.pressure}</td><td>${r.humidity}</td>`;
+        tb.appendChild(tr);
+      });
+    }
+
+    async function doPredict() {
+      const vib = Number(document.getElementById('vibration').value);
+      const temp = Number(document.getElementById('temperature').value);
+      const pres = Number(document.getElementById('pressure').value);
+      const body = {
+        machine_id: machineId,
+        timestamp: new Date().toISOString(),
+        features: { vibration: vib, temperature: temp, pressure: pres, humidity: 0.4 }
+      };
+      const res = await apiPost('/api/predict', body);
+      // Highlight critical_parameter in output
+      const jsonText = JSON.stringify(res, null, 2).replace(
+        new RegExp(res.critical_parameter, 'g'),
+        (m) => `\u001b[1m${m}\u001b[0m`
+      );
+      // Use HTML highlight instead of ANSI
+      const highlighted = jsonText
+        .replace(/\u001b\[1m/g, '<span class="highlight">')
+        .replace(/\u001b\[0m/g, '</span>');
+      document.getElementById('result').innerHTML = highlighted;
+
+      // rough repair cost estimate
+      const fp = Number(res.failure_probability || 0);
+      const base = 1000; // sample base cost
+      const est = Math.round(base * (0.5 + fp) );
+      const band = fp > 0.7 ? 'High' : fp > 0.4 ? 'Medium' : 'Low';
+      document.getElementById('cost').textContent = `Repair Estimate: ${band} · $${est}`;
+    }
+
+    document.getElementById('predictBtn').addEventListener('click', doPredict);
+    document.getElementById('dlCsv').addEventListener('click', ()=> download(`/api/machines/${encodeURIComponent(machineId)}/predictions.csv`));
+
+    loadHistory();
+  </script>
+</body>
+</html>
