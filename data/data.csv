@@ -1,0 +1,7 @@
+unit_id,machine_type,last_oil_change,weekly_score,monthly_score,record_date
+88-525001,KANSAI machine,2025-10-01,40,9,2025-10-01
+88-525001,KANSAI machine,2025-11-01,39,8,2025-11-01
+27-7200,single needle machine,2025-10-05,36,9,2025-10-05
+27-7200,single needle machine,2025-11-05,34,7,2025-11-05
+_NA-800,overlock machine,2025-10-10,38,8,2025-10-10
+_NA-800,overlock machine,2025-11-10,36,8,2025-11-10
